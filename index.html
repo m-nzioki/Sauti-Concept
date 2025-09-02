@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sauti — Web PoC</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg: #0b1b13;
+      --card: #0f241a;
+      --ink: #e7f6ec;
+      --muted: #a7c8b6;
+      --accent: #29a36a;
+      --ring: rgba(41,163,106,.35);
+    }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; }
+    #app { display: grid; grid-template-columns: 360px 1fr; grid-template-rows: 100vh; }
+    #panel { background: var(--card); border-right: 1px solid rgba(255,255,255,0.06); padding: 16px; overflow: auto; }
+    #map { height: 100vh; }
+    h1 { font-size: 18px; margin: 0 0 8px; letter-spacing: .2px; }
+    .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+    .btn { display: inline-flex; gap: 8px; align-items: center; background: #163626; color: var(--ink); border: 1px solid rgba(255,255,255,0.08); padding: 8px 10px; border-radius: 12px; cursor: pointer; }
+    .btn.primary { background: var(--accent); color: #08160f; border-color: var(--accent); font-weight: 600; }
+    .btn.ghost { background: transparent; border-color: rgba(255,255,255,0.12); }
+    .btn:focus { outline: 2px solid var(--ring); outline-offset: 2px; }
+    .stack { display: grid; gap: 10px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .card { background: #0e2319; border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 12px; }
+    label { font-size: 12px; color: var(--muted); }
+    input, select, textarea { width: 100%; padding: 10px 12px; background: #0b1e15; border: 1px solid rgba(255,255,255,0.08); color: var(--ink); border-radius: 12px; }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--ring); }
+    small.note { color: var(--muted); display: block; margin-top: 6px; }
+    .divider { height: 1px; background: rgba(255,255,255,0.06); margin: 10px 0; }
+    .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #0b1e15; border: 1px solid rgba(255,255,255,0.08); font-size: 12px; color: var(--muted); }
+    .list { display: grid; gap: 6px; }
+    .list-item { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 8px; border-radius: 12px; }
+    .list-item:hover { background: rgba(255,255,255,0.04); }
+    .ok { color: #72e0a5; }
+    .warn { color: #ffd275; }
+    .err { color: #ff8a8a; }
+    .circle-legend { width: 10px; height: 10px; border-radius: 999px; display: inline-block; margin-right: 6px; background: #72e0a5; opacity: .6; }
+    .footer { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <h1>Sauti — Web PoC</h1>
+      <div class="sub">Location-based audio stories. Add a pin, set a radius, and the audio will play when you're inside the circle. <span class="pill"><span class="circle-legend"></span>Geofence radius</span></div>
+
+      <div class="card stack">
+        <div class="row">
+          <button id="enableAudio" class="btn primary">🔊 Enable Audio</button>
+          <button id="locateMe" class="btn">📍 Center on Me</button>
+        </div>
+        <div id="audioStatus" class="sub">Audio locked (click Enable). Geolocation: <span id="geoStatus" class="warn">waiting…</span></div>
+      </div>
+
+      <div class="card stack">
+        <h3 style="margin:0">Add a Pin</h3>
+        <form id="pinForm" class="stack">
+          <div>
+            <label>Title</label>
+            <input id="fTitle" placeholder="e.g., Nairobi Arboretum" required />
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <label>Latitude</label>
+              <input id="fLat" type="number" step="any" placeholder="-1.2921" required />
+            </div>
+            <div style="flex:1">
+              <label>Longitude</label>
+              <input id="fLng" type="number" step="any" placeholder="36.8219" required />
+            </div>
+          </div>
+          <div class="row">
+            <button id="useMyLocation" type="button" class="btn">Use my location</button>
+            <span class="sub">or type coordinates</span>
+          </div>
+          <div>
+            <label>Radius (meters)</label>
+            <input id="fRadius" type="number" min="10" step="5" value="150" />
+          </div>
+          <div class="divider"></div>
+          <div>
+            <label>Audio Source</label>
+            <div class="row">
+              <label class="row" style="gap:6px"><input type="radio" name="audioSrc" value="url" checked /> URL</label>
+              <label class="row" style="gap:6px"><input type="radio" name="audioSrc" value="file" /> Upload File</label>
+              <label class="row" style="gap:6px"><input type="radio" name="audioSrc" value="record" /> Record</label>
+            </div>
+          </div>
+          <div id="audioUrlRow">
+            <input id="fAudioUrl" placeholder="https://…/story.mp3 (must allow CORS)" />
+            <small class="note">Tip: for a quick test, paste any MP3 URL.</small>
+          </div>
+          <div id="audioFileRow" style="display:none">
+            <input id="fAudioFile" type="file" accept="audio/*" />
+            <small class="note">Stored locally in your browser for this demo.</small>
+          </div>
+          <div id="audioRecordRow" style="display:none" class="stack">
+            <div class="row">
+              <button id="recordBtn" type="button" class="btn">⏺️ Start Recording</button>
+              <audio id="recordPreview" controls style="width:100%; display:none"></audio>
+            </div>
+            <small class="note">Max ~60s recommended for local storage.</small>
+          </div>
+          <div class="row">
+            <button class="btn primary" type="submit">➕ Add Pin</button>
+            <button id="resetPins" class="btn ghost" type="button">Reset Demo Pins</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card stack">
+        <h3 style="margin:0">Pins</h3>
+        <div id="pinList" class="list"></div>
+      </div>
+
+      <div class="footer">Made for demo purposes. Background play/geofencing is limited by browser rules & battery saving.
+      </div>
+    </aside>
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // ---------- Utilities ----------
+    const $$ = sel => document.querySelector(sel);
+    const $all = sel => Array.from(document.querySelectorAll(sel));
+
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371000; // meters
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+    const STORAGE_KEY = 'sautiPins:v1';
+
+    function loadPins() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || null; } catch { return null; }
+    }
+    function savePins(pins) { localStorage.setItem(STORAGE_KEY, JSON.stringify(pins)); }
+
+    function demoPins() {
+      return [
+        { id: uid(), title: 'Nairobi Arboretum', lat: -1.2921, lng: 36.8219, radius: 200, audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
+        { id: uid(), title: 'Oloolua Forest', lat: -1.3733, lng: 36.758, radius: 220, audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3' },
+      ];
+    }
+
+    // ---------- Map Setup ----------
+    const map = L.map('map');
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+
+    // Default center Nairobi
+    map.setView([-1.2921, 36.8219], 12);
+
+    let state = {
+      pins: loadPins() || demoPins(),
+      markers: new Map(),
+      circles: new Map(),
+      userMarker: null,
+      userAccCircle: null,
+      audioUnlocked: false,
+      activePinId: null,
+      player: null,
+      mediaRecorder: null,
+      recordedBlob: null,
+    };
+
+    function renderPinsToMap() {
+      // Clear existing
+      state.markers.forEach(m => map.removeLayer(m));
+      state.circles.forEach(c => map.removeLayer(c));
+      state.markers.clear();
+      state.circles.clear();
+
+      state.pins.forEach(pin => {
+        const marker = L.marker([pin.lat, pin.lng]).addTo(map)
+          .bindPopup(`<b>${pin.title}</b><br/><button data-play="${pin.id}" class="popupPlay">▶︎ Play here</button>`);
+        const circle = L.circle([pin.lat, pin.lng], { radius: pin.radius, color: '#72e0a5', fillOpacity: 0.15 }).addTo(map);
+        state.markers.set(pin.id, marker);
+        state.circles.set(pin.id, circle);
+      });
+    }
+
+    function renderPinList() {
+      const list = $$('#pinList');
+      list.innerHTML = '';
+      state.pins.forEach(pin => {
+        const item = document.createElement('div');
+        item.className = 'list-item';
+        item.innerHTML = `<div>
+            <div style="font-weight:600">${pin.title}</div>
+            <div class="sub">${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)} • ${pin.radius} m</div>
+          </div>
+          <div class="row">
+            <button class="btn" data-center="${pin.id}">🗺️</button>
+            <button class="btn" data-play="${pin.id}">▶︎</button>
+            <button class="btn ghost" data-delete="${pin.id}">🗑️</button>
+          </div>`;
+        list.appendChild(item);
+      });
+    }
+
+    function rebuild() { renderPinsToMap(); renderPinList(); savePins(state.pins); }
+
+    // ---------- Audio Engine ----------
+    function ensurePlayer() {
+      if (!state.player) {
+        const a = new Audio();
+        a.preload = 'auto';
+        a.loop = false;
+        state.player = a;
+      }
+      return state.player;
+    }
+
+    function getPinAudioSrc(pin) {
+      if (pin.audioDataUrl) return pin.audioDataUrl; // local recorded/uploaded
+      return pin.audioUrl || '';
+    }
+
+    async function playPin(pin) {
+      if (!state.audioUnlocked) return; // respect user gesture requirements
+      const src = getPinAudioSrc(pin);
+      if (!src) return;
+      const player = ensurePlayer();
+      try {
+        if (!player.paused) player.pause();
+        player.src = src;
+        await player.play();
+        state.activePinId = pin.id;
+        $$('#audioStatus').innerHTML = `Now playing: <b>${pin.title}</b>`;
+      } catch (e) {
+        console.warn('Playback failed:', e);
+        $$('#audioStatus').innerHTML = `<span class="err">Playback blocked. Tap Enable Audio, then try again.</span>`;
+      }
+    }
+
+    function stopAudio() {
+      if (state.player && !state.player.paused) state.player.pause();
+      state.activePinId = null;
+      $$('#audioStatus').textContent = 'Audio idle.';
+    }
+
+    function nearestPinInside(userLat, userLng) {
+      let best = null;
+      let bestD = Infinity;
+      for (const pin of state.pins) {
+        const d = haversine(userLat, userLng, pin.lat, pin.lng);
+        if (d <= pin.radius && d < bestD) { best = pin; bestD = d; }
+      }
+      return best;
+    }
+
+    function onPositionUpdate(pos) {
+      const { latitude, longitude, accuracy } = pos.coords;
+      // Update user marker and accuracy circle
+      if (!state.userMarker) {
+        state.userMarker = L.marker([latitude, longitude], { title: 'You' }).addTo(map);
+        state.userAccCircle = L.circle([latitude, longitude], { radius: accuracy || 15, color: '#4db487', fillOpacity: .1 }).addTo(map);
+      } else {
+        state.userMarker.setLatLng([latitude, longitude]);
+        state.userAccCircle.setLatLng([latitude, longitude]).setRadius(accuracy || 15);
+      }
+      $$('#geoStatus').innerHTML = `<span class="ok">tracking</span>`;
+
+      // Geofence check
+      const pin = nearestPinInside(latitude, longitude);
+      if (pin) {
+        if (state.activePinId !== pin.id) {
+          playPin(pin);
+        }
+      } else {
+        if (state.activePinId) stopAudio();
+      }
+    }
+
+    function onPositionError(err) {
+      console.warn('Geolocation error', err);
+      $$('#geoStatus').innerHTML = `<span class="err">${err.message}</span>`;
+    }
+
+    // ---------- Geolocation ----------
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(onPositionUpdate, onPositionError, {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000,
+      });
+    } else {
+      $$('#geoStatus').innerHTML = `<span class="err">Geolocation unsupported</span>`;
+    }
+
+    // ---------- UI Wiring ----------
+    // initial render
+    rebuild();
+
+    // Handle popup play buttons
+    map.on('popupopen', (e) => {
+      const node = e.popup.getElement();
+      const btn = node.querySelector('.popupPlay');
+      if (btn) {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-play');
+          const pin = state.pins.find(p => p.id === id);
+          playPin(pin);
+        });
+      }
+    });
+
+    // Panel list buttons
+    $$('#pinList').addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const id = btn.getAttribute('data-center') || btn.getAttribute('data-play') || btn.getAttribute('data-delete');
+      const pin = state.pins.find(p => p.id === id);
+      if (!pin) return;
+      if (btn.hasAttribute('data-center')) {
+        map.setView([pin.lat, pin.lng], 15);
+        const m = state.markers.get(pin.id); if (m) m.openPopup();
+      } else if (btn.hasAttribute('data-play')) {
+        playPin(pin);
+      } else if (btn.hasAttribute('data-delete')) {
+        if (confirm(`Delete pin “${pin.title}”?`)) {
+          state.pins = state.pins.filter(p => p.id !== pin.id);
+          rebuild();
+        }
+      }
+    });
+
+    // Enable Audio
+    $$('#enableAudio').addEventListener('click', async () => {
+      state.audioUnlocked = true;
+      // Attempt a tiny play to unlock on some browsers
+      const p = ensurePlayer();
+      try { p.src = ''; await p.play().catch(()=>{}); } catch {}
+      $$('#audioStatus').innerHTML = 'Audio unlocked. Will auto-play inside a geofence.';
+    });
+
+    // Center on Me
+    $$('#locateMe').addEventListener('click', () => {
+      if (state.userMarker) {
+        map.setView(state.userMarker.getLatLng(), 15);
+      }
+    });
+
+    // Add Pin form
+    const pinForm = $$('#pinForm');
+    const srcRadios = () => document.querySelector('input[name="audioSrc"]:checked').value;
+    function updateAudioRows() {
+      const v = srcRadios();
+      $$('#audioUrlRow').style.display = v === 'url' ? 'block' : 'none';
+      $$('#audioFileRow').style.display = v === 'file' ? 'block' : 'none';
+      $$('#audioRecordRow').style.display = v === 'record' ? 'block' : 'none';
+    }
+    $all('input[name="audioSrc"]').forEach(r => r.addEventListener('change', updateAudioRows));
+    updateAudioRows();
+
+    // Use my location
+    $$('#useMyLocation').addEventListener('click', () => {
+      if (state.userMarker) {
+        const { lat, lng } = state.userMarker.getLatLng();
+        $$('#fLat').value = lat.toFixed(6);
+        $$('#fLng').value = lng.toFixed(6);
+      } else {
+        alert('Waiting for your location… walk outside or allow permission.');
+      }
+    });
+
+    // Recording
+    const recBtn = $$('#recordBtn');
+    const recPreview = $$('#recordPreview');
+    let recChunks = [];
+
+    async function toggleRecording() {
+      if (!state.mediaRecorder) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const mr = new MediaRecorder(stream);
+          state.mediaRecorder = mr;
+          recChunks = [];
+          mr.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+          mr.onstop = () => {
+            const blob = new Blob(recChunks, { type: 'audio/webm' });
+            state.recordedBlob = blob;
+            const url = URL.createObjectURL(blob);
+            recPreview.src = url; recPreview.style.display = 'block';
+          };
+          mr.start();
+          recBtn.textContent = '⏹️ Stop Recording';
+        } catch (e) {
+          alert('Microphone permission denied.');
+        }
+      } else {
+        state.mediaRecorder.stop();
+        state.mediaRecorder = null;
+        recBtn.textContent = '⏺️ Start Recording';
+      }
+    }
+    recBtn.addEventListener('click', toggleRecording);
+
+    async function fileToDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function blobToDataURL(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    pinForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const title = $$('#fTitle').value.trim();
+      const lat = parseFloat($$('#fLat').value);
+      const lng = parseFloat($$('#fLng').value);
+      const radius = Math.max(10, parseInt($$('#fRadius').value || '100', 10));
+      const src = srcRadios();
+
+      let audioUrl = '';
+      let audioDataUrl = '';
+
+      if (src === 'url') {
+        audioUrl = $$('#fAudioUrl').value.trim();
+        if (!audioUrl) { alert('Provide an audio URL.'); return; }
+      } else if (src === 'file') {
+        const f = $$('#fAudioFile').files[0];
+        if (!f) { alert('Choose an audio file.'); return; }
+        audioDataUrl = await fileToDataURL(f);
+      } else if (src === 'record') {
+        if (!state.recordedBlob) { alert('Record something first.'); return; }
+        audioDataUrl = await blobToDataURL(state.recordedBlob);
+      }
+
+      const pin = { id: uid(), title, lat, lng, radius, audioUrl, audioDataUrl };
+      state.pins.push(pin);
+      // clear form minimal
+      $$('#fTitle').value = '';
+      $$('#fAudioUrl').value = '';
+      $$('#fAudioFile').value = '';
+      state.recordedBlob = null; recPreview.style.display = 'none';
+
+      rebuild();
+      map.setView([lat, lng], 15);
+      alert('Pin added! It will auto-play when you are inside the circle (after enabling audio).');
+    });
+
+    // Reset demo pins
+    $$('#resetPins').addEventListener('click', () => {
+      if (!confirm('Reset to demo pins? This will erase your local pins.')) return;
+      state.pins = demoPins();
+      rebuild();
+    });
+
+    // Startup tip: if you are already inside any geofence, it will play after enabling audio.
+  </script>
+</body>
+</html>
